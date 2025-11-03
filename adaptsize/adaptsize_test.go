@@ -2,12 +2,12 @@ package adaptsize
 
 import (
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"testing"
 )
 
 func newDeterministic(capacity int64) *Cache {
-	r := rand.New(rand.NewSource(1))
+	r := rand.New(rand.NewPCG(1, 0)) // seed=1, stream=0
 	c := New(Options{
 		CapacityBytes: capacity,
 		WindowN:       1_000_000, // avoid background tuning in most tests
@@ -60,7 +60,7 @@ func TestLRUEviction(t *testing.T) {
 }
 
 func TestBackgroundTuningMovesC(t *testing.T) {
-	r := rand.New(rand.NewSource(2))
+	r := rand.New(rand.NewPCG(2, 0)) // seed=1, stream=0
 	c := New(Options{
 		CapacityBytes: 1 << 20, // 1 MiB
 		WindowN:       5000,
