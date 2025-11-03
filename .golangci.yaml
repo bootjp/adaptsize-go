@@ -1,0 +1,28 @@
+run:
+  tests: false
+
+linters:
+  enable:
+    - cyclop
+    - dupl
+    - durationcheck
+    - errorlint
+    - exhaustive
+    - copyloopvar
+    - forcetypeassert
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - gosec
+    - makezero
+    - nakedret
+    - nestif
+    - nilerr
+    - noctx
+    - prealloc
+    - unconvert
+    - unparam
+    - wastedassign
+    - wrapcheck
