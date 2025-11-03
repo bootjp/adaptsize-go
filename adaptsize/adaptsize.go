@@ -2,8 +2,10 @@ package adaptsize
 
 import (
 	"container/list"
+	crand "crypto/rand"
+	"encoding/binary"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +56,19 @@ type obs struct {
 	cnt  int64
 }
 
+func defaultRandom() *rand.PCG {
+	var s1, s2 uint64
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &s1); err != nil {
+		// fallback
+		//nolint:gosec
+		s1 = uint64(time.Now().UnixNano())
+	}
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &s2); err != nil {
+		s2 = s1 ^ 0x9e3779b97f4a7c15
+	}
+	return rand.NewPCG(s1, s2)
+}
+
 // New constructs a cache and starts the background tuner.
 func New(opts Options) *Cache {
 	if opts.WindowN <= 0 {
@@ -72,7 +87,8 @@ func New(opts Options) *Cache {
 		opts.GridSteps = 32
 	}
 	if opts.Rand == nil {
-		opts.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+		//nolint:gosec
+		opts.Rand = rand.New(defaultRandom())
 	}
 
 	c := &Cache{
@@ -156,7 +172,13 @@ func (c *Cache) evictOne() {
 		return
 	}
 	b := c.lru.Back()
-	e := b.Value.(*entry)
+	if b == nil {
+		return
+	}
+	e, ok := b.Value.(*entry)
+	if !ok {
+		return
+	}
 	delete(c.items, e.key)
 	c.used -= e.size
 	c.lru.Remove(b)

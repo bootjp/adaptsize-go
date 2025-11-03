@@ -1,4 +1,3 @@
-
 package adaptsize
 
 import (
@@ -13,14 +12,20 @@ func (c *Cache) tuneLoop() {
 			// snapshot window
 			c.winMu.Lock()
 			snap := make(map[string]obs, len(c.obs))
-			for k, v := range c.obs { snap[k] = *v }
+			for k, v := range c.obs {
+				snap[k] = *v
+			}
 			c.obs = make(map[string]*obs)
 			c.winReqs = 0
 			c.winMu.Unlock()
 
-			if len(snap) == 0 { continue }
+			if len(snap) == 0 {
+				continue
+			}
 			items, totalReq := c.buildRates(snap)
-			if len(items) == 0 { continue }
+			if len(items) == 0 {
+				continue
+			}
 			bestC := c.searchBestC(items, totalReq)
 			if !math.IsNaN(bestC) && !math.IsInf(bestC, 0) {
 				c.cBits.Store(math.Float64bits(bestC))
@@ -31,13 +36,18 @@ func (c *Cache) tuneLoop() {
 	}
 }
 
-type rateItem struct{ s int64; r float64 }
+type rateItem struct {
+	s int64
+	r float64
+}
 
 func (c *Cache) buildRates(snap map[string]obs) ([]rateItem, float64) {
 	items := make([]rateItem, 0, len(snap))
 	total := 0.0
 	for k, o := range snap {
-		if o.size <= 0 { continue }
+		if o.size <= 0 {
+			continue
+		}
 		prev := c.prevR[k]
 		rate := c.opts.Alpha*float64(o.cnt) + (1.0-c.opts.Alpha)*prev
 		c.prevR[k] = rate
@@ -62,7 +72,9 @@ func (c *Cache) searchBestC(items []rateItem, totalReq float64) float64 {
 	best := -1.0
 	for _, cand := range grid {
 		mu := solveMu(items, cand, c.opts.CapacityBytes)
-		if mu <= 0 || math.IsNaN(mu) || math.IsInf(mu, 0) { continue }
+		if mu <= 0 || math.IsNaN(mu) || math.IsInf(mu, 0) {
+			continue
+		}
 		hits := 0.0
 		for _, it := range items {
 			p := pinClosedForm(it.r, mu, float64(it.s), cand)
@@ -78,7 +90,9 @@ func (c *Cache) searchBestC(items []rateItem, totalReq float64) float64 {
 
 // P_in(i) closed form.
 func pinClosedForm(ri, mu float64, si float64, c float64) float64 {
-	if ri <= 0 { return 0 }
+	if ri <= 0 {
+		return 0
+	}
 	x := math.Exp(ri/mu) - 1.0
 	e := math.Exp(-si / c)
 	num := x * e
@@ -86,24 +100,28 @@ func pinClosedForm(ri, mu float64, si float64, c float64) float64 {
 }
 
 // Solve μ: sum P_in(i)*s_i = K via monotone binary search.
-func solveMu(items []rateItem, c float64, K int64) float64 {
-	if K <= 0 { return math.NaN() }
+func solveMu(items []rateItem, c float64, k int64) float64 {
+	if k <= 0 {
+		return math.NaN()
+	}
 	muLo := 1e-6
 	muHi := 1.0
 	for i := 0; i < 40; i++ {
-		if capBytes(items, muHi, c) < float64(K) { break }
+		if capBytes(items, muHi, c) < float64(k) {
+			break
+		}
 		muHi *= 2
 	}
 	for i := 0; i < 60; i++ {
-		mid := 0.5*(muLo+muHi)
+		mid := 0.5 * (muLo + muHi)
 		sum := capBytes(items, mid, c)
-		if sum > float64(K) {
+		if sum > float64(k) {
 			muLo = mid
 		} else {
 			muHi = mid
 		}
 	}
-	return 0.5*(muLo+muHi)
+	return 0.5 * (muLo + muHi)
 }
 
 func capBytes(items []rateItem, mu, c float64) float64 {
@@ -114,7 +132,6 @@ func capBytes(items []rateItem, mu, c float64) float64 {
 	}
 	return sum
 }
-
 
 /*
 TuneOnce runs one tuning round synchronously:
@@ -128,14 +145,20 @@ func (c *Cache) TuneOnce() {
 	// snapshot window
 	c.winMu.Lock()
 	snap := make(map[string]obs, len(c.obs))
-	for k, v := range c.obs { snap[k] = *v }
+	for k, v := range c.obs {
+		snap[k] = *v
+	}
 	c.obs = make(map[string]*obs)
 	c.winReqs = 0
 	c.winMu.Unlock()
 
-	if len(snap) == 0 { return }
+	if len(snap) == 0 {
+		return
+	}
 	items, totalReq := c.buildRates(snap)
-	if len(items) == 0 || totalReq == 0 { return }
+	if len(items) == 0 || totalReq == 0 {
+		return
+	}
 	bestC := c.searchBestC(items, totalReq)
 	if !math.IsNaN(bestC) && !math.IsInf(bestC, 0) {
 		c.cBits.Store(math.Float64bits(bestC))
