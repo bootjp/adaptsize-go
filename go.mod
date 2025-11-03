@@ -1,4 +1,3 @@
-module github.com/bootjp/my-go-docker-preset
+module example.com/adaptsize
 
 go 1.22
-
