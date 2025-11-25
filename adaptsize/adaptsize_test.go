@@ -29,13 +29,19 @@ func TestAdmissionMonotonic(t *testing.T) {
 	admittedSmall := 0
 	admittedLarge := 0
 	for i := 0; i < N; i++ {
-		_ = c.Set(randKey("s", i), make([]byte, 1<<10)) // 1 KiB
-		if _, ok := c.Get(randKey("s", i)); ok {
+		admitted, _ := c.Store(randKey("s", i), 1<<10) // 1 KiB
+		if admitted {
 			admittedSmall++
 		}
-		_ = c.Set(randKey("L", i), make([]byte, 4<<20)) // 4 MiB
-		if _, ok := c.Get(randKey("L", i)); ok {
+		if c.Get(randKey("s", i)) {
+			// track metrics
+		}
+		admitted, _ = c.Store(randKey("L", i), 4<<20) // 4 MiB
+		if admitted {
 			admittedLarge++
+		}
+		if c.Get(randKey("L", i)) {
+			// track metrics
 		}
 	}
 	ps := float64(admittedSmall) / float64(N)
@@ -49,13 +55,27 @@ func TestLRUEviction(t *testing.T) {
 	c := newDeterministic(1024) // 1 KiB
 	defer c.Close()
 	c.cBits.Store(math.Float64bits(1 << 30)) // admit almost always
-	_ = c.Set("a", make([]byte, 800))
-	_ = c.Set("b", make([]byte, 400)) // should evict a
-	if _, ok := c.Get("a"); ok {
+	_, evicted1 := c.Store("a", 800)
+	if len(evicted1) > 0 {
+		t.Fatalf("unexpected evictions: %v", evicted1)
+	}
+	_, evicted2 := c.Store("b", 400) // should evict a
+	if c.Get("a") {
 		t.Fatal("expected a evicted")
 	}
-	if _, ok := c.Get("b"); !ok {
+	if !c.Get("b") {
 		t.Fatal("expected b present")
+	}
+	// Check that "a" was in the evicted list
+	found := false
+	for _, key := range evicted2 {
+		if key == "a" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected 'a' to be in evicted list")
 	}
 }
 
@@ -77,11 +97,11 @@ func TestBackgroundTuningMovesC(t *testing.T) {
 	for i := 0; i < 30_000; i++ {
 		// small hot keys cycle
 		k := randKey("hot", i%128)
-		_ = c.Set(k, make([]byte, 512))
+		_, _ = c.Store(k, 512)
 		c.Get(k)
 		// occasional large misses
 		if i%50 == 0 {
-			_ = c.Set(randKey("cold", i), make([]byte, 256<<10))
+			_, _ = c.Store(randKey("cold", i), 256<<10)
 		}
 	}
 	// give time for tuner to run

@@ -46,7 +46,6 @@ type Cache struct {
 
 type entry struct {
 	key  string
-	val  []byte
 	size int64
 	node *list.Element
 }
@@ -117,71 +116,94 @@ func (c *Cache) UsedBytes() int64 { c.mu.RLock(); defer c.mu.RUnlock(); return c
 // ParameterC returns current c.
 func (c *Cache) ParameterC() float64 { return math.Float64frombits(c.cBits.Load()) }
 
-// Get returns value and ok. Touches LRU and records stats.
-func (c *Cache) Get(key string) ([]byte, bool) {
+// Get records a get request for metrics. Returns true if the key is currently tracked.
+func (c *Cache) Get(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.items[key]; ok {
 		c.lru.MoveToFront(e.node)
 		c.record(key, e.size)
-		return e.val, true
+		return true
 	}
 	c.record(key, 0)
-	return nil, false
+	return false
 }
 
-// Set inserts or updates value. Admission is probabilistic.
-func (c *Cache) Set(key string, value []byte) error {
-	size := int64(len(value))
+// Store records a store request with key and size. Admission is probabilistic.
+// Returns true if admitted and a list of keys that should be evicted.
+func (c *Cache) Store(key string, size int64) (bool, []string) {
 	if size > c.opts.CapacityBytes {
-		return nil // never admit larger than capacity
+		c.record(key, size)
+		return false, nil // never admit larger than capacity
 	}
 	// admission using atomic c
 	cVal := math.Float64frombits(c.cBits.Load())
 	admit := c.opts.Rand.Float64() < math.Exp(-float64(size)/cVal)
 	if !admit {
 		c.record(key, size)
-		return nil
+		return false, nil
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var evicted []string
 	if e, ok := c.items[key]; ok {
 		c.used += size - e.size
-		e.val = value
 		e.size = size
 		c.lru.MoveToFront(e.node)
 	} else {
 		for c.used+size > c.opts.CapacityBytes {
-			c.evictOne()
+			evictedKey := c.evictOne()
+			if evictedKey != "" {
+				evicted = append(evicted, evictedKey)
+			}
 		}
 		n := c.lru.PushFront(&entry{key: key})
-		e := &entry{key: key, val: value, size: size, node: n}
+		e := &entry{key: key, size: size, node: n}
 		n.Value = e
 		c.items[key] = e
 		c.used += size
 	}
 	// stats
 	c.record(key, size)
-	return nil
+	return true, evicted
 }
 
-func (c *Cache) evictOne() {
+// EvictKeys returns a list of keys that should be evicted based on LRU order.
+// This removes all tracked keys. The caller should remove these keys from their actual storage.
+func (c *Cache) EvictKeys() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var keys []string
+	for c.lru.Len() > 0 {
+		key := c.evictOne()
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func (c *Cache) evictOne() string {
 	if c.lru.Len() == 0 {
-		return
+		return ""
 	}
 	b := c.lru.Back()
 	if b == nil {
-		return
+		return ""
 	}
 	e, ok := b.Value.(*entry)
 	if !ok {
-		return
+		c.lru.Remove(b)
+		return ""
 	}
-	delete(c.items, e.key)
+	key := e.key
+	delete(c.items, key)
 	c.used -= e.size
 	c.lru.Remove(b)
+	return key
 }
 
 func (c *Cache) record(key string, size int64) {
