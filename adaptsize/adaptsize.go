@@ -1,7 +1,6 @@
 package adaptsize
 
 import (
-	"container/list"
 	crand "crypto/rand"
 	"encoding/binary"
 	"math"
@@ -25,11 +24,6 @@ type Options struct {
 type Cache struct {
 	opts Options
 
-	mu    sync.RWMutex
-	used  int64
-	items map[string]*entry
-	lru   *list.List
-
 	// parameter c stored atomically
 	cBits atomic.Uint64
 
@@ -44,15 +38,17 @@ type Cache struct {
 	stopCh chan struct{}
 }
 
-type entry struct {
-	key  string
-	size int64
-	node *list.Element
-}
-
 type obs struct {
 	size int64
 	cnt  int64
+}
+
+// Request holds metrics about a cache access. The caller is responsible for
+// determining whether it was a hit in their underlying cache.
+type Request struct {
+	Key       string
+	SizeBytes int64
+	Hit       bool
 }
 
 func defaultRandom() *rand.PCG {
@@ -92,8 +88,6 @@ func New(opts Options) *Cache {
 
 	c := &Cache{
 		opts:   opts,
-		items:  make(map[string]*entry),
-		lru:    list.New(),
 		obs:    make(map[string]*obs),
 		prevR:  make(map[string]float64),
 		tuneCh: make(chan struct{}, 1),
@@ -105,105 +99,29 @@ func New(opts Options) *Cache {
 }
 
 // Close stops background tuning.
-func (c *Cache) Close() { close(c.stopCh) }
-
-// Len returns number of cached entries.
-func (c *Cache) Len() int { c.mu.RLock(); defer c.mu.RUnlock(); return len(c.items) }
-
-// UsedBytes returns used capacity.
-func (c *Cache) UsedBytes() int64 { c.mu.RLock(); defer c.mu.RUnlock(); return c.used }
-
-// ParameterC returns current c.
-func (c *Cache) ParameterC() float64 { return math.Float64frombits(c.cBits.Load()) }
-
-// Get records a get request for metrics. Returns true if the key is currently tracked.
-func (c *Cache) Get(key string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.items[key]; ok {
-		c.lru.MoveToFront(e.node)
-		c.record(key, e.size)
-		return true
-	}
-	c.record(key, 0)
-	return false
+func (c *Cache) Close() {
+	close(c.stopCh)
 }
 
-// Store records a store request with key and size. Admission is probabilistic.
-// Returns true if admitted and a list of keys that should be evicted.
-func (c *Cache) Store(key string, size int64) (bool, []string) {
-	if size > c.opts.CapacityBytes {
-		c.record(key, size)
-		return false, nil // never admit larger than capacity
+// ParameterC returns current c.
+func (c *Cache) ParameterC() float64 {
+	return math.Float64frombits(c.cBits.Load())
+}
+
+// Request records a cache request and returns whether a miss should be
+// admitted. On misses (Hit=false), the return value is the probabilistic
+// admission decision based on exp(-size/c).
+func (c *Cache) Request(req Request) bool {
+	c.record(req.Key, req.SizeBytes)
+	if req.Hit {
+		return false
+	}
+	if req.SizeBytes > c.opts.CapacityBytes {
+		return false // never admit larger than capacity
 	}
 	// admission using atomic c
 	cVal := math.Float64frombits(c.cBits.Load())
-	admit := c.opts.Rand.Float64() < math.Exp(-float64(size)/cVal)
-	if !admit {
-		c.record(key, size)
-		return false, nil
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var evicted []string
-	if e, ok := c.items[key]; ok {
-		c.used += size - e.size
-		e.size = size
-		c.lru.MoveToFront(e.node)
-	} else {
-		for c.used+size > c.opts.CapacityBytes {
-			evictedKey := c.evictOne()
-			if evictedKey != "" {
-				evicted = append(evicted, evictedKey)
-			}
-		}
-		n := c.lru.PushFront(&entry{key: key})
-		e := &entry{key: key, size: size, node: n}
-		n.Value = e
-		c.items[key] = e
-		c.used += size
-	}
-	// stats
-	c.record(key, size)
-	return true, evicted
-}
-
-// EvictKeys returns a list of keys that should be evicted based on LRU order.
-// This removes all tracked keys. The caller should remove these keys from their actual storage.
-func (c *Cache) EvictKeys() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var keys []string
-	for c.lru.Len() > 0 {
-		key := c.evictOne()
-		if key != "" {
-			keys = append(keys, key)
-		}
-	}
-	return keys
-}
-
-func (c *Cache) evictOne() string {
-	if c.lru.Len() == 0 {
-		return ""
-	}
-	b := c.lru.Back()
-	if b == nil {
-		return ""
-	}
-	e, ok := b.Value.(*entry)
-	if !ok {
-		c.lru.Remove(b)
-		return ""
-	}
-	key := e.key
-	delete(c.items, key)
-	c.used -= e.size
-	c.lru.Remove(b)
-	return key
+	return c.opts.Rand.Float64() < math.Exp(-float64(req.SizeBytes)/cVal)
 }
 
 func (c *Cache) record(key string, size int64) {
@@ -229,4 +147,6 @@ func (c *Cache) record(key string, size int64) {
 	}
 }
 
-func (c *Cache) setC(v int64) { c.cBits.Store(math.Float64bits(float64(v))) }
+func (c *Cache) setC(v int64) {
+	c.cBits.Store(math.Float64bits(float64(v)))
+}
