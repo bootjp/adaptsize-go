@@ -14,8 +14,12 @@ cache := adaptsize.New(adaptsize.Options{
 })
 defer cache.Close()
 
-_ = cache.Set("k1", []byte("v"))
-if v, ok := cache.Get("k1"); ok { _ = v }
+// For every request, record it and decide admission on misses.
+req := adaptsize.Request{Key: "k1", SizeBytes: 1234, Hit: false} // hit comes from your cache
+admit := cache.Request(req)
+if !req.Hit && admit {
+    // insert into your cache implementation
+}
 
 c := cache.ParameterC()
 _ = c
